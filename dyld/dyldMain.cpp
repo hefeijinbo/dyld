@@ -1026,39 +1026,33 @@ static void handleDyldInCache(const MachOFile* dyldMF, const KernelArgs* kernArg
 #endif
 }
 
-//
-// Entry point for dyld.  The kernel loads dyld and jumps to __dyld_start which
-// sets up some registers and call this function.
-//
-// Note: this function never returns, it calls exit().  Therefore stack protectors
-// are useless, since the epilog is never executed.  Marking the fucntion no-return
-// disable the stack protector.  The stack protector was also causing problems
-// with armv7k codegen since it access the random value through a GOT slot in the
-// prolog, but dyld is not rebased yet.
-//
+// dyld的入口点。内核加载dyld并跳转到__dyld_start，它设置一些寄存器并调用这个函数。
+// 注意:这个函数永远不会返回，它调用exit()。 no-return禁用堆栈保护。
 void start(const KernelArgs* kernArgs, void* prevDyldMH) __attribute__((noreturn)) __asm("start");
+
 void start(const KernelArgs* kernArgs, void* prevDyldMH)
 {
-    
+    // 发出kdebug标记,表示dyld已启动
     dyld3::kdebug_trace_dyld_marker(DBG_DYLD_TIMING_BOOTSTRAP_START, 0, 0, 0, 0);
 
     // dyld重定位
     const MachOAnalyzer* dyldMA = getDyldMH(); // MachO 信息
-    uintptr_t            slide  = dyldMA->getSlide(); // 
+    uintptr_t            slide  = dyldMA->getSlide(); // 会生成一个随机数(ASLR)
     if ( !dyldMA->inDyldCache() ) {
         assert(dyldMA->hasChainedFixups());
         __block Diagnostics diag;
+        // 使用slide(ASLR)修正所有images的基址
         dyldMA->withChainStarts(diag, 0, ^(const dyld_chained_starts_in_image* starts) {
             dyldMA->fixupAllChainedFixups(diag, starts, slide, dyld3::Array<const void*>(), nullptr);
         });
         diag.assertNoError();
 
-        // make __DATA_CONST read-only (kernel maps it r/w)
+        // 对于__TEXT,__DATA_CONST等段设置只读, 防止数据被篡改
         dyldMA->forEachSegment(^(const MachOAnalyzer::SegmentInfo& segInfo, bool& stop) {
             if ( segInfo.readOnlyData ) {
-                const uint8_t* start = (uint8_t*)(segInfo.vmAddr + slide);
+                const uint8_t* start = (uint8_t*)(segInfo.vmAddr + slide); // 虚拟地址+ASLR->真实地址
                 size_t         size  = (size_t)segInfo.vmSize;
-                sSyscallDelegate.mprotect((void*)start, size, PROT_READ);
+                sSyscallDelegate.mprotect((void*)start, size, PROT_READ); // 设置只读
             }
         });
     }
@@ -1066,7 +1060,7 @@ void start(const KernelArgs* kernArgs, void* prevDyldMH)
     // mach消息初始化
     mach_init();
 
-    // 栈保护
+    // 设置堆栈随机值，用于堆栈保护
     __guard_setup(kernArgs->findApple());
 
     // setup so that open_with_subsystem() works
