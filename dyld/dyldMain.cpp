@@ -439,13 +439,17 @@ static int fake_main(int argc, const char* const argv[], const char* const envp[
 
 
 //
-// Load any dependent dylibs and bind all together.
-// Returns address of main() in target.
+// 加载任何相关的dylib并将它们绑定在一起。
+// 返回main()在target中的地址。
 //
 __attribute__((noinline)) static MainFunc prepare(APIs& state, const MachOAnalyzer* dyldMH)
 {
-    gProcessInfo->terminationFlags = 0; // by default show backtrace in crash logs
+    // `gProcessInfo` 是存储dyld所有镜像信息的结构体:，保存着mach_header, dyld_uuid_info, dyldVersion等等信息。
+    // 配置dyld信息中停止标识符
+    gProcessInfo->terminationFlags = 0; // 默认情况下，在崩溃日志中显示回溯
+    // 配置dyld信息中平台信息
     gProcessInfo->platform         = (uint32_t)state.config.process.platform;
+    // 配置dyld信息中路径信息
     gProcessInfo->dyldPath         = state.config.process.dyldPath;
 
     uint64_t launchTraceID = 0;
@@ -474,7 +478,7 @@ __attribute__((noinline)) static MainFunc prepare(APIs& state, const MachOAnalyz
 #endif
 
 #if 0
-    // check if main executable is valid
+    // 检查主可执行文件是否有效
     Diagnostics diag;
     bool validMainExec = state.config.process.mainExecutable->isValidMainExecutable(diag, state.config.process.mainExecutablePath, -1, *(state.config.process.archs), state.config.process.platform);
     if ( !validMainExec && state.config.process.mainExecutable->enforceFormat(dyld3::MachOAnalyzer::Malformed::sdkOnOrAfter2021)) {
@@ -483,23 +487,24 @@ __attribute__((noinline)) static MainFunc prepare(APIs& state, const MachOAnalyz
     }
 #endif
 
-    // log env variables if asked
+    // 如果询问，log打印环境env变量
     if ( state.config.log.env ) {
         for (const char* const* p=state.config.process.envp; *p != nullptr; ++p) {
             state.log("%s\n", *p);
         }
     }
 
-    // check for pre-built Loader
+    // 检查预构建pre-built Loader
     state.initializeClosureMode();
     const PrebuiltLoaderSet* mainSet    = state.processPrebuiltLoaderSet();
     Loader*                  mainLoader = nullptr;
     if ( mainSet != nullptr ) {
         mainLoader = (Loader*)mainSet->atIndex(0);
-        state.loaded.reserve(state.initialImageCount()); // help avoid reallocations of Vector
+        state.loaded.reserve(state.initialImageCount()); // 帮助避免Vector的重新定位
     }
     if ( mainLoader == nullptr ) {
-        // if no pre-built Loader, make a just-in-time one
+        // 如果没有预构建的Loader，制造一个just-in-time
+        // just-in-time是dyld4的新特性：`pre-build   just-in-time`预构建 实时解析的双解析模式
         state.loaded.reserve(512);  // guess starting point for Vector size
         Diagnostics buildDiag;
         mainLoader = JustInTimeLoader::makeLaunchLoader(buildDiag, state, state.config.process.mainExecutable,
@@ -1057,36 +1062,36 @@ void start(const KernelArgs* kernArgs, void* prevDyldMH)
         });
     }
 
-    // mach消息初始化
+    // mach消息初始化, mach trap 实现用户态到内核态的转换
     mach_init();
 
-    // 设置堆栈随机值，用于堆栈保护
+    // 设置栈随机值，用于栈溢出保护
     __guard_setup(kernArgs->findApple());
 
     // setup so that open_with_subsystem() works
     _subsystem_init(kernArgs->findApple());
 
-    // handle switching to dyld in dyld cache for native platforms
+    // dyld缓存中获取dyld
     handleDyldInCache(dyldMA, kernArgs, (MachOFile*)prevDyldMH);
 
     bool useHWTPro = false;
-    // create an Allocator inside its own allocation pool
+    // C++ Allocator
     Allocator& allocator = Allocator::persistentAllocator(useHWTPro);
 
-    // use placement new to construct ProcessConfig object in the Allocator pool
+    // 构建进程配置
     ProcessConfig& config = *new (allocator.aligned_alloc(alignof(ProcessConfig), sizeof(ProcessConfig))) ProcessConfig(kernArgs, sSyscallDelegate, allocator);
 
 #if !SUPPPORT_PRE_LC_MAIN
-    // stack allocate RuntimeLocks. They cannot be in the Allocator pool which is usually read-only
+    // 堆栈分配RuntimeLocks。它们不能在通常为只读的Allocator池中
     RuntimeLocks  sLocks;
 #endif
 
-    // create APIs (aka RuntimeState) object in the allocator
+    // 在分配器中创建API（也称为RuntimeState）对象
     APIs& state = *new (allocator.aligned_alloc(alignof(APIs), sizeof(APIs))) APIs(config, allocator, sLocks);
 
 #if !TARGET_OS_SIMULATOR
-    // FIXME: we should move this earlier, but for now we need the runtime state to inited before setup compact info
-    // Until we do that compact info may miss certain very early dyld crashes
+    // FIXME：我们应该更早地移动它，但目前我们需要在设置压缩信息之前将运行时状态初始化，
+    // 直到我们这样做之前，压缩信息可能会错过某些早期的dyld崩溃
     auto processSnapshot = state.getCurrentProcessSnapshot();
     processSnapshot->setPlatform((uint64_t)state.config.process.platform);
     processSnapshot->setDyldState(dyld_process_state_dyld_initialized);
@@ -1096,7 +1101,7 @@ void start(const KernelArgs* kernArgs, void* prevDyldMH)
         processSnapshot->addSharedCache(std::move(sharedCache));
     }
 
-    // Add dyld to compact info
+    //  将dyld添加到压缩信息
     if ( dyldMA->inDyldCache() && processSnapshot->sharedCache() ) {
         processSnapshot->addSharedCacheImage((const struct mach_header *)dyldMA);
     } else {
@@ -1112,7 +1117,7 @@ void start(const KernelArgs* kernArgs, void* prevDyldMH)
         processSnapshot->addImage(std::move(dyldImage));
     }
 
-    // Add the main executable to compact info
+    // 将主可执行文件添加到压缩信息
     FileRecord mainExecutableFile;
     if (state.config.process.mainExecutableFSID && state.config.process.mainExecutableObjID) {
         mainExecutableFile = state.fileManager.fileRecordForVolumeDevIDAndObjID(state.config.process.mainExecutableFSID, state.config.process.mainExecutableObjID);
@@ -1127,18 +1132,19 @@ void start(const KernelArgs* kernArgs, void* prevDyldMH)
     state.commitProcessSnapshot();
 #endif
 
-    // load all dependents of program and bind them together
+    // -------------重点入口-------------------
+    // 加载所有的库与程序
     MainFunc appMain = prepare(state, dyldMA);
 
 
-    // now make all dyld Allocated data structures read-only
+    // 现在将所有dyld分配的数据结构设置为只读
     state.decWritable();
 
-    // call main() and if it returns, call exit() with the result
-    // Note: this is organized so that a backtrace in a program's main thread shows just "start" below "main"
+    // 调用main()，如果它返回，调用exit()并返回结果
+    // 注意:这是经过组织的，以便在程序的主线程中回溯时只在“main”下面显示“start”。
     int result = appMain(state.config.process.argc, state.config.process.argv, state.config.process.envp, state.config.process.apple);
 
-    // if we got here, main() returned (as opposed to program calling exit())
+    // 如果我们到达这里，main（）返回（与程序调用exit（）相反）
 #if TARGET_OS_OSX
     // <rdar://74518676> libSystemHelpers is not set up for simulators, so directly call _exit()
     if ( MachOFile::isSimulatorPlatform(state.config.process.platform) )
