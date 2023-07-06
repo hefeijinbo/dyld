@@ -439,72 +439,29 @@ static int fake_main(int argc, const char* const argv[], const char* const envp[
 
 
 //
-// 加载任何相关的dylib并将它们绑定在一起。
+// 加载相关的dylib并将它们绑定在一起。
 // 返回main()在target中的地址。
 //
 __attribute__((noinline)) static MainFunc prepare(APIs& state, const MachOAnalyzer* dyldMH)
 {
     // `gProcessInfo` 是存储dyld所有镜像信息的结构体:，保存着mach_header, dyld_uuid_info, dyldVersion等等信息。
-    // 配置dyld信息中停止标识符
-    gProcessInfo->terminationFlags = 0; // 默认情况下，在崩溃日志中显示回溯
+    // 配置dyld信息中停止标识符, 0 表示在崩溃日志中显示回溯
+    gProcessInfo->terminationFlags = 0;
     // 配置dyld信息中平台信息
     gProcessInfo->platform         = (uint32_t)state.config.process.platform;
     // 配置dyld信息中路径信息
     gProcessInfo->dyldPath         = state.config.process.dyldPath;
 
-    uint64_t launchTraceID = 0;
-    if ( dyld3::kdebug_trace_dyld_enabled(DBG_DYLD_TIMING_LAUNCH_EXECUTABLE) ) {
-        launchTraceID = dyld3::kdebug_trace_dyld_duration_start(DBG_DYLD_TIMING_LAUNCH_EXECUTABLE, (uint64_t)state.config.process.mainExecutable, 0, 0);
-    }
-
-#if TARGET_OS_OSX
-    const bool isSimulatorProgram = MachOFile::isSimulatorPlatform(state.config.process.platform);
-    if ( const char* simPrefixPath = state.config.pathOverrides.simRootPath() ) {
-#if __arm64e__
-        if ( strcmp(state.config.process.mainExecutable->archName(), "arm64e") == 0 )
-            halt("arm64e not supported for simulator programs");
-#endif
-        if ( isSimulatorProgram ) {
-            char simDyldPath[PATH_MAX];
-            strlcpy(simDyldPath, simPrefixPath, PATH_MAX);
-            strlcat(simDyldPath, "/usr/lib/dyld_sim", PATH_MAX);
-            return prepareSim(state, simDyldPath);
-        }
-        halt("DYLD_ROOT_PATH only allowed with simulator programs");
-    }
-    else if ( isSimulatorProgram ) {
-        halt("DYLD_ROOT_PATH not set for simulator program");
-    }
-#endif
-
-#if 0
-    // 检查主可执行文件是否有效
-    Diagnostics diag;
-    bool validMainExec = state.config.process.mainExecutable->isValidMainExecutable(diag, state.config.process.mainExecutablePath, -1, *(state.config.process.archs), state.config.process.platform);
-    if ( !validMainExec && state.config.process.mainExecutable->enforceFormat(dyld3::MachOAnalyzer::Malformed::sdkOnOrAfter2021)) {
-        state.log("%s in %s", diag.errorMessage(), state.config.process.mainExecutablePath);
-        halt(diag.errorMessage());
-    }
-#endif
-
-    // 如果询问，log打印环境env变量
-    if ( state.config.log.env ) {
-        for (const char* const* p=state.config.process.envp; *p != nullptr; ++p) {
-            state.log("%s\n", *p);
-        }
-    }
-
-    // 检查预构建pre-built Loader
+    // 从磁盘缓存文件读取闭包(perbuilt loader)来提高启动速度
     state.initializeClosureMode();
     const PrebuiltLoaderSet* mainSet    = state.processPrebuiltLoaderSet();
     Loader*                  mainLoader = nullptr;
     if ( mainSet != nullptr ) {
         mainLoader = (Loader*)mainSet->atIndex(0);
-        state.loaded.reserve(state.initialImageCount()); // 帮助避免Vector的重新定位
+        state.loaded.reserve(state.initialImageCount());
     }
+    // 如果没有 prebuilt Loader，使用just-in-time实时解析
     if ( mainLoader == nullptr ) {
-        // 如果没有预构建的Loader，制造一个just-in-time
-        // just-in-time是dyld4的新特性：`pre-build   just-in-time`预构建 实时解析的双解析模式
         state.loaded.reserve(512);  // guess starting point for Vector size
         Diagnostics buildDiag;
         mainLoader = JustInTimeLoader::makeLaunchLoader(buildDiag, state, state.config.process.mainExecutable,
@@ -515,7 +472,6 @@ __attribute__((noinline)) static MainFunc prepare(APIs& state, const MachOAnalyz
         }
     }
     state.setMainLoader(mainLoader);
-    // start by just adding main executable to debuggers's known image list
     state.notifyDebuggerLoad(mainLoader);
 
     const bool needToWritePrebuiltLoaderSet = !mainLoader->isPrebuilt && (state.saveAppClosureFile() || state.failIfCouldBuildAppClosureFile());
@@ -528,7 +484,7 @@ __attribute__((noinline)) static MainFunc prepare(APIs& state, const MachOAnalyz
         addNonSharedCacheImageUUID(state.persistentAllocator, dyldInfo);
     }
 
-    // load any inserted dylibs
+    // 加载所有DYLD_INSERT_LIBRARIES指定的库
     STACK_ALLOC_OVERFLOW_SAFE_ARRAY(Loader*, topLevelLoaders, 16);
     topLevelLoaders.push_back(mainLoader);
     Loader::LoadChain   loadChainMain { nullptr, mainLoader };
@@ -564,7 +520,7 @@ __attribute__((noinline)) static MainFunc prepare(APIs& state, const MachOAnalyz
         missingPaths.addPath(mustBeMissingPath);
     };
 
-    // recursively load everything needed by main executable and inserted dylibs
+    // 递归加载可执行程序和insert dylib需要的资源
     Diagnostics depsDiag;
     options.insertedDylib = false;
     if ( needToWritePrebuiltLoaderSet )
@@ -1040,13 +996,16 @@ void start(const KernelArgs* kernArgs, void* prevDyldMH)
     // 发出kdebug标记,表示dyld已启动
     dyld3::kdebug_trace_dyld_marker(DBG_DYLD_TIMING_BOOTSTRAP_START, 0, 0, 0, 0);
 
-    // dyld重定位
     const MachOAnalyzer* dyldMA = getDyldMH(); // MachO 信息
-    uintptr_t            slide  = dyldMA->getSlide(); // 会生成一个随机数(ASLR)
+    
+    // slide: 生成一个随机数(ASLR), 物理地址 = ALSR + 虚拟地址 (偏移), 用于重定位(rebase).
+    uintptr_t            slide  = dyldMA->getSlide();
+   
+    // 为了节约空间 , 苹果将UIKit / Foundation这些系统库放在到动态库共享缓存区 (dyld shared cache)
     if ( !dyldMA->inDyldCache() ) {
         assert(dyldMA->hasChainedFixups());
         __block Diagnostics diag;
-        // 使用slide(ASLR)修正所有images的基址
+        // 使用slide(ASLR)修正所有images(动态库)的基址
         dyldMA->withChainStarts(diag, 0, ^(const dyld_chained_starts_in_image* starts) {
             dyldMA->fixupAllChainedFixups(diag, starts, slide, dyld3::Array<const void*>(), nullptr);
         });
@@ -1062,17 +1021,11 @@ void start(const KernelArgs* kernArgs, void* prevDyldMH)
         });
     }
 
-    // mach消息初始化, mach trap 实现用户态到内核态的转换
+    // mach消息初始化, mach trap消息来实现用户态到内核态的转换
     mach_init();
 
-    // 设置栈随机值，用于栈溢出保护
+    // 栈溢出保护
     __guard_setup(kernArgs->findApple());
-
-    // setup so that open_with_subsystem() works
-    _subsystem_init(kernArgs->findApple());
-
-    // dyld缓存中获取dyld
-    handleDyldInCache(dyldMA, kernArgs, (MachOFile*)prevDyldMH);
 
     bool useHWTPro = false;
     // C++ Allocator
@@ -1081,27 +1034,25 @@ void start(const KernelArgs* kernArgs, void* prevDyldMH)
     // 构建进程配置
     ProcessConfig& config = *new (allocator.aligned_alloc(alignof(ProcessConfig), sizeof(ProcessConfig))) ProcessConfig(kernArgs, sSyscallDelegate, allocator);
 
-#if !SUPPPORT_PRE_LC_MAIN
-    // 堆栈分配RuntimeLocks。它们不能在通常为只读的Allocator池中
-    RuntimeLocks  sLocks;
-#endif
-
-    // 在分配器中创建API（也称为RuntimeState）对象
+    // API = RuntimeState, 用于获取进程,系统和images等各种信息
     APIs& state = *new (allocator.aligned_alloc(alignof(APIs), sizeof(APIs))) APIs(config, allocator, sLocks);
 
 #if !TARGET_OS_SIMULATOR
-    // FIXME：我们应该更早地移动它，但目前我们需要在设置压缩信息之前将运行时状态初始化，
-    // 直到我们这样做之前，压缩信息可能会错过某些早期的dyld崩溃
+    // 进程快照信息
     auto processSnapshot = state.getCurrentProcessSnapshot();
     processSnapshot->setPlatform((uint64_t)state.config.process.platform);
     processSnapshot->setDyldState(dyld_process_state_dyld_initialized);
+    
+    
+    // 记录进程打开的文件信息
     FileRecord cacheFileRecord = state.fileManager.fileRecordForVolumeDevIDAndObjID(gProcessInfo->sharedCacheFSID, gProcessInfo->sharedCacheFSObjID);
     if (cacheFileRecord.exists()) {
         auto sharedCache = SharedCache(state.ephemeralAllocator, std::move(cacheFileRecord), processSnapshot->identityMapper(), (uint64_t)config.dyldCache.addr, gProcessInfo->processDetachedFromSharedRegion);
+        // 添加fileRecord信息到 process SnapShot
         processSnapshot->addSharedCache(std::move(sharedCache));
     }
 
-    //  将dyld添加到压缩信息
+    // 添加当前的image信息
     if ( dyldMA->inDyldCache() && processSnapshot->sharedCache() ) {
         processSnapshot->addSharedCacheImage((const struct mach_header *)dyldMA);
     } else {
@@ -1117,7 +1068,7 @@ void start(const KernelArgs* kernArgs, void* prevDyldMH)
         processSnapshot->addImage(std::move(dyldImage));
     }
 
-    // 将主可执行文件添加到压缩信息
+    // 将主可执行文件添加到process Snapshot
     FileRecord mainExecutableFile;
     if (state.config.process.mainExecutableFSID && state.config.process.mainExecutableObjID) {
         mainExecutableFile = state.fileManager.fileRecordForVolumeDevIDAndObjID(state.config.process.mainExecutableFSID, state.config.process.mainExecutableObjID);
@@ -1132,7 +1083,7 @@ void start(const KernelArgs* kernArgs, void* prevDyldMH)
     state.commitProcessSnapshot();
 #endif
 
-    // -------------重点入口-------------------
+    // 主程序入口
     // 加载所有的库与程序
     MainFunc appMain = prepare(state, dyldMA);
 

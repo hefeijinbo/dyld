@@ -3535,15 +3535,15 @@ void APIs::runAllInitializersForMain()
     if ( !config.security.internalInstall || (config.process.pageInLinkingMode != 3) )
         config.syscall.disablePageInLinking();
 
-    // run libSystem's initializer first
+    // 初始化libsystem
     const_cast<Loader*>(this->libSystemLoader)->beginInitializers(*this);
     this->libSystemLoader->runInitializers(*this);
     gProcessInfo->libSystemInitialized = true;
 
     // after running libSystem's initializer, tell objc to run any +load methods on libSystem sub-dylibs
     this->notifyObjCInit(this->libSystemLoader);
-    // <rdar://problem/32209809> call 'init' function on all images already init'ed (below libSystem)
-    // Iterate using indices so that the array doesn't grow underneath us if a +load dloopen's
+    
+    // 再初始化其他的动态库
     for ( uint32_t i = 0; i != this->loaded.size(); ++i ) {
         const Loader* ldr = this->loaded[i];
         if ( (ldr->dylibInDyldCache || ldr->analyzer(*this)->isDylib()) && (strncmp(ldr->analyzer(*this)->installName(), "/usr/lib/system/lib", 19) == 0) ) {
