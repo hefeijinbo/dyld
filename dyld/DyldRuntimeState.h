@@ -233,19 +233,20 @@ typedef dyld3::MultiMap<SwiftForeignTypeProtocolConformanceDiskLocationKey, Swif
 class [[clang::ptrauth_vtable_pointer(process_independent, address_discrimination, type_discrimination)]] RuntimeState
 {
 public:
-    const ProcessConfig&            config;
-    Allocator&                      persistentAllocator;
+    const ProcessConfig&            config; // 进程静态信息
+    Allocator&                      persistentAllocator; // 内存分配器
     EphemeralAllocator              ephemeralAllocator;
-    const Loader*                   mainExecutableLoader = nullptr;
-    Vector<ConstAuthLoader>         loaded;
-    const Loader*                   libSystemLoader      = nullptr;
-    const Loader*                   libdyldLoader        = nullptr;
+    // Loader 加载器(Prebuilt or JustInTime 两种 loader)
+    const Loader*                   mainExecutableLoader = nullptr; // 主程序加载方式
+    Vector<ConstAuthLoader>         loaded; // 其他动态库加载方式
+    const Loader*                   libSystemLoader      = nullptr; // libsystem.dylib 加载方式
+    const Loader*                   libdyldLoader        = nullptr; // libdyld.dylib 加载方式
 #if BUILDING_DYLD || BUILDING_UNIT_TESTS
     const void*                     libdyldMissingSymbol = nullptr;
 #endif
     uint64_t                        libdyldMissingSymbolRuntimeOffset = 0;
 #if BUILDING_DYLD
-    RuntimeLocks&                   _locks;
+    RuntimeLocks&                   _locks; // 同步锁
 #endif
     dyld4::ProgramVars*             vars                 = nullptr;
     const LibSystemHelpers*         libSystemHelpers     = nullptr;
@@ -260,7 +261,7 @@ public:
     TypeProtocolMap*                typeProtocolMap     = nullptr;
     MetadataProtocolMap*            metadataProtocolMap = nullptr;
     ForeignProtocolMap*             foreignProtocolMap  = nullptr;
-    FileManager                     fileManager;
+    FileManager                     fileManager; // 进程文件管理
 
 #if BUILDING_DYLD
                                 RuntimeState(const ProcessConfig& c, Allocator& alloc, RuntimeLocks& locks)
@@ -593,11 +594,13 @@ private:
     void                        setDyldPatchedObjCClasses() const;
     void                        reloadFSInfos();
 
+    // objc 数据
     _dyld_objc_notify_mapped        _notifyObjCMapped       = nullptr;
     _dyld_objc_notify_init          _notifyObjCInit         = nullptr;
     _dyld_objc_notify_unmapped      _notifyObjCUnmapped     = nullptr;
     _dyld_objc_notify_patch_class   _notifyObjCPatchClass   = nullptr;
     _dyld_objc_notify_mapped2       _notifyObjCMapped2       = nullptr;
+    // 注册的通知函数
     Vector<NotifyFunc>              _notifyAddImage;
     Vector<NotifyFunc>              _notifyRemoveImage;
     Vector<LoadNotifyFunc>          _notifyLoadImage;
@@ -606,7 +609,7 @@ private:
     Vector<RegisteredDOF>           _loadersNeedingDOFUnregistration;
     Vector<MissingFlatSymbol>       _missingFlatLazySymbols;
     Vector<DynamicReference>        _dynamicReferences;
-    const PrebuiltLoaderSet*        _cachedDylibsPrebuiltLoaderSet  = nullptr;
+    const PrebuiltLoaderSet*        _cachedDylibsPrebuiltLoaderSet  = nullptr; // prebuild loader set
     uint8_t*                        _cachedDylibsStateArray         = nullptr;
     const char*                     _processPrebuiltLoaderSetPath   = nullptr;
     const PrebuiltLoaderSet*        _processPrebuiltLoaderSet       = nullptr;

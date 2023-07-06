@@ -989,6 +989,7 @@ static void handleDyldInCache(const MachOFile* dyldMF, const KernelArgs* kernArg
 
 // dyld的入口点。内核加载dyld并跳转到__dyld_start，它设置一些寄存器并调用这个函数。
 // 注意:这个函数永远不会返回，它调用exit()。 no-return禁用堆栈保护。
+// KernelArgs (argc、argv、envp和apple parameter)
 void start(const KernelArgs* kernArgs, void* prevDyldMH) __attribute__((noreturn)) __asm("start");
 
 void start(const KernelArgs* kernArgs, void* prevDyldMH)
@@ -1031,10 +1032,10 @@ void start(const KernelArgs* kernArgs, void* prevDyldMH)
     // C++ Allocator
     Allocator& allocator = Allocator::persistentAllocator(useHWTPro);
 
-    // 构建进程配置
+    // 进程的`固定`状态信息（例如安全策略，dyld缓存，日志记录标志，平台等）。
     ProcessConfig& config = *new (allocator.aligned_alloc(alignof(ProcessConfig), sizeof(ProcessConfig))) ProcessConfig(kernArgs, sSyscallDelegate, allocator);
 
-    // API = RuntimeState, 用于获取进程,系统和images等各种信息
+    // DyldRuntimeState: 进程生命周期内`变化`的状态信息。它包括Loader、注册的通知函数和所有锁。
     APIs& state = *new (allocator.aligned_alloc(alignof(APIs), sizeof(APIs))) APIs(config, allocator, sLocks);
 
 #if !TARGET_OS_SIMULATOR

@@ -38,6 +38,7 @@ namespace dyld4 {
 
 struct RuntimeLocks;
 
+// 进程生命周期内`变化`的状态信息, 包括Loader、注册的通知函数和所有锁。
 class VIS_HIDDEN APIs : public RuntimeState
 {
 public:

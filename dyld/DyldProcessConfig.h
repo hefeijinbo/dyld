@@ -121,11 +121,7 @@ struct KernelArgs
 
 
 
-//
-// ProcessConfig holds the fixed, initial state of the process. That is, all the information
-// about the process that won't change through the life of the process. This is a singleton
-// which is constructed via a static initializer in dyld itself.
-//
+// 进程的`固定`状态信息（例如安全策略，dyld缓存，日志记录标志，平台等）。
 class VIS_HIDDEN ProcessConfig
 {
 public:
@@ -396,10 +392,10 @@ public:
 
     // all instance variables are organized into groups
     SyscallDelegate         syscall;
-    Process                 process;
-    Security                security;
-    Logging                 log;
-    DyldCache               dyldCache;
+    Process                 process; // 进程信息(平台, 可执行程序信息)
+    Security                security; // 安全策略
+    Logging                 log; // 日志记录
+    DyldCache               dyldCache; // dydld缓存
     PathOverrides           pathOverrides;
 };
 
