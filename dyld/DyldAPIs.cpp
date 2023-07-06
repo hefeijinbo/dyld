@@ -3540,10 +3540,10 @@ void APIs::runAllInitializersForMain()
     this->libSystemLoader->runInitializers(*this);
     gProcessInfo->libSystemInitialized = true;
 
-    // after running libSystem's initializer, tell objc to run any +load methods on libSystem sub-dylibs
+    // 通知objc运行 +load方法
     this->notifyObjCInit(this->libSystemLoader);
     
-    // 再初始化其他的动态库
+    // 再加载其他的images(动态库)
     for ( uint32_t i = 0; i != this->loaded.size(); ++i ) {
         const Loader* ldr = this->loaded[i];
         if ( (ldr->dylibInDyldCache || ldr->analyzer(*this)->isDylib()) && (strncmp(ldr->analyzer(*this)->installName(), "/usr/lib/system/lib", 19) == 0) ) {

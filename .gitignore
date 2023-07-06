@@ -31,3 +31,5 @@
 *.out
 *.app
 *.xcuserstate
+dyld.xcodeproj/xcuserdata/sense.xcuserdatad/xcschemes/xcschememanagement.plist
+.DS_Store

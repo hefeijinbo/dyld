@@ -444,7 +444,7 @@ static int fake_main(int argc, const char* const argv[], const char* const envp[
 //
 __attribute__((noinline)) static MainFunc prepare(APIs& state, const MachOAnalyzer* dyldMH)
 {
-    // `gProcessInfo` 是存储dyld所有镜像信息的结构体:，保存着mach_header, dyld_uuid_info, dyldVersion等等信息。
+    // `gProcessInfo` 是存储镜像信息的结构体:，保存着mach_header, dyld_uuid_info, dyldVersion等信息。
     // 配置dyld信息中停止标识符, 0 表示在崩溃日志中显示回溯
     gProcessInfo->terminationFlags = 0;
     // 配置dyld信息中平台信息
@@ -460,9 +460,9 @@ __attribute__((noinline)) static MainFunc prepare(APIs& state, const MachOAnalyz
         mainLoader = (Loader*)mainSet->atIndex(0);
         state.loaded.reserve(state.initialImageCount());
     }
-    // 如果没有 prebuilt Loader，使用just-in-time实时解析
+    // 如果没有 prebuilt Loader，使用just-in-time loader 实时解析获得mainLoader
     if ( mainLoader == nullptr ) {
-        state.loaded.reserve(512);  // guess starting point for Vector size
+        state.loaded.reserve(512);
         Diagnostics buildDiag;
         mainLoader = JustInTimeLoader::makeLaunchLoader(buildDiag, state, state.config.process.mainExecutable,
                                                         state.config.process.mainExecutablePath, nullptr);
@@ -578,7 +578,7 @@ __attribute__((noinline)) static MainFunc prepare(APIs& state, const MachOAnalyz
     // check for interposing tuples before doing fixups
     state.buildInterposingTables();
 
-    // do fixups
+    // 使用ASLR rebase 所有images和loader的地址
     {
         dyld3::ScopedTimer timer(DBG_DYLD_TIMING_APPLY_FIXUPS, 0, 0, 0);
         // just in case we need to patch the case
@@ -681,7 +681,7 @@ __attribute__((noinline)) static MainFunc prepare(APIs& state, const MachOAnalyz
 
     notifyMonitoringDyld(false, (unsigned int)state.loaded.size(), &mhBuffer[0], &pathsBuffer[0]);
 
-    // wire up libdyld.dylib to dyld
+    // 链接 libdyld.dylib
     LibdyldDyld4Section* libdyld4Section = nullptr;
     if ( state.libdyldLoader != nullptr ) {
         const MachOLoaded* libdyldML = state.libdyldLoader->loadAddress(state);
@@ -716,7 +716,7 @@ __attribute__((noinline)) static MainFunc prepare(APIs& state, const MachOAnalyz
         halt("program does not link with libSystem.B.dylib");
 
 #if !TARGET_OS_SIMULATOR
-    // if launched with JustInTimeLoader, may need to serialize it
+    // 保存JustInTimeLoader到PrebuiltLoaderSet
     if ( needToWritePrebuiltLoaderSet ) {
         dyld3::ScopedTimer timer(DBG_DYLD_TIMING_BUILD_CLOSURE, 0, 0, 0);
         if ( state.config.log.loaders )
@@ -769,7 +769,7 @@ __attribute__((noinline)) static MainFunc prepare(APIs& state, const MachOAnalyz
 
 #else
 
-    // run all initializers
+    // 加载所有的images(dylib)和 load方法
     dyld4::notifyMonitoringDyldBeforeInitializers();
     state.runAllInitializersForMain();
 
@@ -987,17 +987,16 @@ static void handleDyldInCache(const MachOFile* dyldMF, const KernelArgs* kernArg
 #endif
 }
 
-// dyld的入口点。内核加载dyld并跳转到__dyld_start，它设置一些寄存器并调用这个函数。
-// 注意:这个函数永远不会返回，它调用exit()。 no-return禁用堆栈保护。
-// KernelArgs (argc、argv、envp和apple parameter)
 void start(const KernelArgs* kernArgs, void* prevDyldMH) __attribute__((noreturn)) __asm("start");
 
+// dyld的入口点。内核加载dyld并跳转到__dyld_start，它设置一些寄存器并调用这个函数。
+// KernelArgs (包含argc、argv、envp和apple parameter)
 void start(const KernelArgs* kernArgs, void* prevDyldMH)
 {
     // 发出kdebug标记,表示dyld已启动
     dyld3::kdebug_trace_dyld_marker(DBG_DYLD_TIMING_BOOTSTRAP_START, 0, 0, 0, 0);
 
-    const MachOAnalyzer* dyldMA = getDyldMH(); // MachO 信息
+    const MachOAnalyzer* dyldMA = getDyldMH(); // MachO 加载器
     
     // slide: 生成一个随机数(ASLR), 物理地址 = ALSR + 虚拟地址 (偏移), 用于重定位(rebase).
     uintptr_t            slide  = dyldMA->getSlide();
@@ -1039,7 +1038,7 @@ void start(const KernelArgs* kernArgs, void* prevDyldMH)
     APIs& state = *new (allocator.aligned_alloc(alignof(APIs), sizeof(APIs))) APIs(config, allocator, sLocks);
 
 #if !TARGET_OS_SIMULATOR
-    // 进程快照信息
+    // 进程快照信息, 用于dump, 崩溃信息收集等
     auto processSnapshot = state.getCurrentProcessSnapshot();
     processSnapshot->setPlatform((uint64_t)state.config.process.platform);
     processSnapshot->setDyldState(dyld_process_state_dyld_initialized);
@@ -1053,7 +1052,7 @@ void start(const KernelArgs* kernArgs, void* prevDyldMH)
         processSnapshot->addSharedCache(std::move(sharedCache));
     }
 
-    // 添加当前的image信息
+    // 添加当前的可执行程序的image信息
     if ( dyldMA->inDyldCache() && processSnapshot->sharedCache() ) {
         processSnapshot->addSharedCacheImage((const struct mach_header *)dyldMA);
     } else {
@@ -1069,7 +1068,7 @@ void start(const KernelArgs* kernArgs, void* prevDyldMH)
         processSnapshot->addImage(std::move(dyldImage));
     }
 
-    // 将主可执行文件添加到process Snapshot
+    // 将主可执行文件信息添加到process Snapshot
     FileRecord mainExecutableFile;
     if (state.config.process.mainExecutableFSID && state.config.process.mainExecutableObjID) {
         mainExecutableFile = state.fileManager.fileRecordForVolumeDevIDAndObjID(state.config.process.mainExecutableFSID, state.config.process.mainExecutableObjID);
@@ -1084,16 +1083,12 @@ void start(const KernelArgs* kernArgs, void* prevDyldMH)
     state.commitProcessSnapshot();
 #endif
 
-    // 主程序入口
-    // 加载所有的库与程序
+    // 加载所有的库与程序, 返回main()函数地址
     MainFunc appMain = prepare(state, dyldMA);
 
-
-    // 现在将所有dyld分配的数据结构设置为只读
     state.decWritable();
 
-    // 调用main()，如果它返回，调用exit()并返回结果
-    // 注意:这是经过组织的，以便在程序的主线程中回溯时只在“main”下面显示“start”。
+    // 调用main()函数
     int result = appMain(state.config.process.argc, state.config.process.argv, state.config.process.envp, state.config.process.apple);
 
     // 如果我们到达这里，main（）返回（与程序调用exit（）相反）
