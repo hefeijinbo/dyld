@@ -1924,7 +1924,7 @@ void Loader::runInitializersBottomUp(RuntimeState& state, Array<const Loader*>& 
         }
     }
 
-    // tell objc to run any +load methods in this image (done before C++ initializers)
+    // 通知objc在此image映像中运行任何+load方法（在C++初始化器之前完成）。
     state.notifyObjCInit(this);
 
     // run initializers for this image

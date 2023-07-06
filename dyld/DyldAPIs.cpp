@@ -3540,7 +3540,7 @@ void APIs::runAllInitializersForMain()
     this->libSystemLoader->runInitializers(*this);
     gProcessInfo->libSystemInitialized = true;
 
-    // 通知objc运行 +load方法
+    // 通知objc在libSystem子dylib运行 +load方法
     this->notifyObjCInit(this->libSystemLoader);
     
     // 再加载其他的images(动态库)
